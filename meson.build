@@ -11,7 +11,7 @@ doctest_dep=dependency('doctest')
 #simplesockets_dep = dependency('simplesockets', static: true)
 argparse_dep = dependency('argparse', version: '>=3')
 
-executable('streamint', 'streamint.cc', 'wavint.cc',
+executable('streamint', 'streamint.cc', 
 	dependencies: [sqlitedep, json_dep, fmt_dep, sqlitewriter_dep,argparse_dep])
 
 executable('metachan', 'metachan.cc',
