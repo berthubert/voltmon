@@ -14,6 +14,6 @@ argparse_dep = dependency('argparse', version: '>=3')
 executable('streamint', 'streamint.cc', 'wavint.cc',
 	dependencies: [sqlitedep, json_dep, fmt_dep, sqlitewriter_dep,argparse_dep])
 
-executable('selchan', 'selchan.cc',
-	dependencies: [argparse_dep])
+executable('metachan', 'metachan.cc',
+	dependencies: [argparse_dep, json_dep])
        

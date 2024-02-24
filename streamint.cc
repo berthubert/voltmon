@@ -1,14 +1,18 @@
 #include "fmt/core.h"
 #include "fmt/os.h"
+#include "fmt/ranges.h"
 #include <stdexcept>
 #include <math.h>
 #include <iostream>
 #include <vector>
 #include <time.h>
 #include "sqlwriter.hh"
+#include <set>
+#include "nlohmann/json.hpp"
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/accumulators/statistics/stats.hpp>
 #include <boost/accumulators/statistics/p_square_quantile.hpp>
+#include <boost/accumulators/statistics/rolling_mean.hpp>
 
 using namespace boost::accumulators;
 using namespace std;
@@ -122,13 +126,46 @@ void getData(FILE* fp, vector<int32_t>& data, uint32_t samples)
 
 int main(int argc, char** argv)
 {
+  unsigned int hz=0;
+  unsigned int channels=0;
+  string format;
+  string source;
+  double startTime=0;
+  try {
+    string line;
+    getline(cin, line);
+    nlohmann::json meta;
+
+    meta = nlohmann::json::parse(line);
+    meta.at("datarate").get_to(hz);
+    meta.at("channels").get_to(channels);
+    meta.at("format").get_to(format);
+    meta.at("source").get_to(source);
+    meta.at("starttime").get_to(startTime);
+  }
+  catch(std::exception& e) {
+    fmt::print(stderr,"Failed to parse metadata from incoming stream. Pass data through metachan first!\n");
+    fmt::print(stderr,"Error: {}\n", e.what());
+    return EXIT_FAILURE;
+  }
+
+  if(channels != 1 || format != "S32_LE") {
+    fmt::print(stderr, "Only 1 channel signer 32 bit little endian data is supported right now\n");
+    return EXIT_FAILURE;
+  }
+
+  fmt::print("Source '{}' sends data at {} Hz, {} channels format {}, start time {}\n", source, hz, channels, format, startTime);
+  
   SQLiteWriter sqlw("voltmon.sqlite");
   fmt::print("t,tstamp,absv,minv,maxv,q01,q99,phz,phz2,relabsdev,dc,amp,offset,percexcess5,percexcess10\n");
-  unsigned int hz = 192000;
+
+
   vector<int32_t> data;
   typedef accumulator_set<int32_t, stats<tag::p_square_quantile> > bacc_t;
-  for(int t=0;;++t) {
+  accumulator_set<double, stats<tag::rolling_mean> > rolling_amp(tag::rolling_window::window_size = 30);
 
+  
+  for(int t=0;;++t) {
     getData(stdin, data, hz);
     if(data.size() != hz) // whole seconds only, discard last bit
       break;
@@ -214,33 +251,49 @@ int main(int argc, char** argv)
 
     // plot the fit, and see how good it really is
     auto gen = genWave(res);
+    double amp = res[1];
     double absreldev = sdiff(gen,interp)/asum(gen);
     double percexcess5 = 100.0 * sexcess(gen, interp, 0.05*res[1]); // amplitude, 5%
     double percexcess10 = 100.0 * sexcess(gen, interp, 0.10*res[1]); // amplitude, 10%
     double maxpercdev = 100.0*maxdiff(gen, interp)/res[1];
-    time_t now = time(nullptr);
-    fmt::print("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n", t, now, 1.0*abssum/data.size(), minv, maxv, q01, q99, phz, res[2],
+
+    fmt::print("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n", startTime +t, 1.0*abssum/data.size(), minv, maxv, q01, q99, phz, res[2],
                absreldev, res[0], res[1], res[3], percexcess5, percexcess10,maxpercdev);
 
     // fmt::print("t,tstamp,absv,minv,maxv,q01,q99,phz,phz2,relabsdev,dc,amp,offset,percexcess5,percexcess10\n");
 
-    sqlw.addValue({{"t", t}, {"tstamp", now}, {"absv", 1.0*abssum/data.size()}, {"minv", minv}, {"maxv", maxv}, {"q01", q01}, {"q99", q99}, {"phz", phz}, {"phz2", res[2]}, {"absreldev", absreldev}, {"dc", res[0]}, {"amp", res[1]}, {"offset", res[3]}, {"percexcess5", percexcess5}, {"percexcess10", percexcess10}, {"maxpercdev", maxpercdev}});
+    sqlw.addValue({{"source", source}, {"t", (time_t)startTime +t}, {"tstamp", startTime + t}, {"absv", 1.0*abssum/data.size()}, {"minv", minv}, {"maxv", maxv}, {"q01", q01}, {"q99", q99}, {"phz", phz}, {"phz2", res[2]}, {"absreldev", absreldev}, {"dc", res[0]}, {"amp", res[1]}, {"offset", res[3]}, {"percexcess5", percexcess5}, {"percexcess10", percexcess10}, {"maxpercdev", maxpercdev}});
                   
 
     fflush(stdout);
 
-    if(absreldev > 370000 || maxv > 1.05 * q99 || minv < 1.05 * q01 || percexcess10 > 1 || percexcess5 > 6 || maxpercdev > 11) {
-      fmt::print(stderr, "Anomaly at {}, inmag = {}, dc = {}, amp = {}, phz2 = {}\n", t, params[1], res[0], res[1], res[2]);
-      auto out = fmt::output_file("anomaly-"+to_string(t)+".csv");
-      out.print("t,gen,orig\n");
-      for(size_t pos = 0 ; pos < gen.size(); ++pos) {
-        const double t2 = 1.0*pos*step;
-        out.print("{},{},{}\n", t2, gen[pos], interp[pos]);
-      }
+    rolling_amp(fabs(amp));
+    
+    map<string, std::function<bool()>> rules;
+    rules["maxv q99"] = [&]() { return maxv > 1.05*q99; };
+    rules["minv q01"] = [&]() { return minv < 1.05*q01; };
+    rules["percexcess10"] = [&]() { return percexcess10 > 1; };
+    rules["percexcess5"] = [&]() { return percexcess10 > 6; };
+    rules["maxpercdev"] = [&]() { return maxpercdev > 11; };
+    rules["absreldev"] = [&]() { return absreldev > 370000; };
+    rules["ampdev"] = [&]() { double dev = fabs(amp)/rolling_mean(rolling_amp); return dev < 0.99 || dev > 1.01; };
+
+    set<string> fails;
+    for(const auto& r : rules) {
+      if(r.second())
+        fails.insert(r.first);
+    }
+    
+    if(!fails.empty()) {
+      fmt::print(stderr, "Anomalies {} at {}, inmag = {}, dc = {}, amp = {}, phz2 = {}\n",
+                 fails, t, params[1], res[0], res[1], res[2]);
+      
+      nlohmann::json j(fails);
       vector<uint8_t> raw;
       raw.resize(4* data.size());
       raw.assign((uint8_t*)&data[0], ((uint8_t*)&data[0]) + raw.size());
-      sqlw.addValue({{"t", t}, {"tstamp", now}, {"hz", hz}, {"format", "S32_LE"}, {"raw", raw}}, "dumps");
+
+      sqlw.addValue({{"source", source}, {"t", (time_t)startTime +t}, {"tstamp", startTime +t}, {"hz", hz}, {"format", "S32_LE"}, {"raw", raw}, {"reasons", j.dump()}}, "dumps");
     }
   }
 }
