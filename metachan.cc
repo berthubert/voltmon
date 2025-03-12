@@ -2,13 +2,7 @@
 #include <stdint.h>
 #include "nlohmann/json.hpp"
 #include <sys/time.h>
-
-static double getTime()
-{
-  struct timeval tv;
-  gettimeofday(&tv, 0);
-  return tv.tv_sec + tv.tv_usec/1000000.0;
-}
+#include "misc.hh"
 
 int main()
 {
@@ -23,7 +17,7 @@ int main()
   j["channels"]=1;
   j["format"]="S32_LE";
   j["source"]="power";
-  j["starttime"]=getTime();
+  j["starttime"]=getSubsecUnixTime();
   printf("%s\n", j.dump().c_str());
   fflush(stdout);
   msmt m;

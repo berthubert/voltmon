@@ -13,13 +13,13 @@
 #include <boost/accumulators/statistics/stats.hpp>
 #include <boost/accumulators/statistics/p_square_quantile.hpp>
 #include <boost/accumulators/statistics/rolling_mean.hpp>
+#include "misc.hh"
 
 using namespace boost::accumulators;
 using namespace std;
 #include "nr3.h"
 #include "amoeba.h"
 #include "brent.hh"
-
 
 /*
 Receiver of a stream of best data we can get (32 bit, 192kHz for example).
@@ -257,15 +257,15 @@ int main(int argc, char** argv)
     double percexcess10 = 100.0 * sexcess(gen, interp, 0.10*res[1]); // amplitude, 10%
     double maxpercdev = 100.0*maxdiff(gen, interp)/res[1];
 
-    fmt::print("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n", startTime +t, 1.0*abssum/data.size(), minv, maxv, q01, q99, phz, res[2],
-               absreldev, res[0], res[1], res[3], percexcess5, percexcess10,maxpercdev);
+    //    fmt::print("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n", startTime +t, 1.0*abssum/data.size(), minv, maxv, q01, q99, phz, res[2],
+    //         absreldev, res[0], res[1], res[3], percexcess5, percexcess10,maxpercdev);
 
     // fmt::print("t,tstamp,absv,minv,maxv,q01,q99,phz,phz2,relabsdev,dc,amp,offset,percexcess5,percexcess10\n");
 
-    sqlw.addValue({{"source", source}, {"t", (time_t)startTime +t}, {"tstamp", startTime + t}, {"absv", 1.0*abssum/data.size()}, {"minv", minv}, {"maxv", maxv}, {"q01", q01}, {"q99", q99}, {"phz", phz}, {"phz2", res[2]}, {"absreldev", absreldev}, {"dc", res[0]}, {"amp", res[1]}, {"offset", res[3]}, {"percexcess5", percexcess5}, {"percexcess10", percexcess10}, {"maxpercdev", maxpercdev}});
+    sqlw.addValue({{"source", source}, {"t", (time_t)startTime +t}, {"tstamp", startTime + t}, {"rectime", getSubsecUnixTime()}, {"rawtime", getMonotonicUnadjustedTimeValue() + startTime}, {"absv", 1.0*abssum/data.size()}, {"minv", minv}, {"maxv", maxv}, {"q01", q01}, {"q99", q99}, {"phz", phz}, {"phz2", res[2]}, {"absreldev", absreldev}, {"dc", res[0]}, {"amp", res[1]}, {"offset", res[3]}, {"percexcess5", percexcess5}, {"percexcess10", percexcess10}, {"maxpercdev", maxpercdev}});
                   
 
-    fflush(stdout);
+    //    fflush(stdout);
 
     rolling_amp(fabs(amp));
     
